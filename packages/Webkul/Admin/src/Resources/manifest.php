@@ -1,6 +1,6 @@
 <?php
 
 return [
-    'name'    => 'Webkul Bagisto Admin',
+    'name'    => 'Mamta Enterprise Admin',
     'version' => core()->version(),
 ];
