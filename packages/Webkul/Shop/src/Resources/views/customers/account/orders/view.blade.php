@@ -943,6 +943,17 @@
                                                             </span>
                                                         </div>
 
+                                                        <!-- HSN -->
+                                                        @php
+                                                            $hsn = $item->product->hsn_code ?? $item->getTypeInstance()->getOrderedItem($item)->product->hsn_code ?? '';
+                                                        @endphp
+                                                        @if($hsn)
+                                                            <div class="flex justify-between">
+                                                                <span class="text-zinc-500">HSN Code:</span>
+                                                                <span>{{ $hsn }}</span>
+                                                            </div>
+                                                        @endif
+
                                                         <!-- Price -->
                                                         <div class="flex justify-between">
                                                             <span class="text-zinc-500">
@@ -1182,6 +1193,10 @@
                                                     </th>
 
                                                     <th scope="col">
+                                                        HSN Code
+                                                    </th>
+
+                                                    <th scope="col">
                                                         @lang('shop::app.customers.account.orders.view.invoices.price')
                                                     </th>
 
@@ -1212,6 +1227,13 @@
                                                                     @endforeach
                                                                 </div>
                                                             @endif
+                                                        </td>
+
+                                                        <td data-value="HSN Code">
+                                                            @php
+                                                                $hsn = $item->product->hsn_code ?? $item->getTypeInstance()->getOrderedItem($item)->product->hsn_code ?? '';
+                                                            @endphp
+                                                            {{ $hsn }}
                                                         </td>
 
                                                         <td

@@ -188,6 +188,16 @@
                                             @lang('admin::app.sales.invoices.view.sku', ['sku' => $item->getTypeInstance()->getOrderedItem($item)->sku])
                                         </p>
 
+                                        <!-- HSN -->
+                                        @php
+                                            $hsn = $item->product->hsn_code ?? $item->getTypeInstance()->getOrderedItem($item)->product->hsn_code ?? '';
+                                        @endphp
+                                        @if($hsn)
+                                            <p class="text-gray-600 dark:text-gray-300">
+                                                HSN Code: {{ $hsn }}
+                                            </p>
+                                        @endif
+
                                         <!-- Quantity -->
                                         <p class="text-gray-600 dark:text-gray-300">
                                             @lang('admin::app.sales.invoices.view.qty', ['qty' => $item->qty])
