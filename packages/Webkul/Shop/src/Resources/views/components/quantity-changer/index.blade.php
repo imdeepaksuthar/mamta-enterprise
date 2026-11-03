@@ -27,10 +27,19 @@
             >
             </span>
 
-            <p class="w-2.5 select-none text-center max-sm:text-sm">
-                @{{ quantity }}
-            </p>
-            
+            <input
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                maxlength="5"
+                class="me-qty-input max-sm:text-sm"
+                aria-label="Quantity"
+                :value="quantity"
+                @input="sanitize"
+                @change="commit"
+                @keydown.enter.prevent="$event.target.blur()"
+            />
+
             <span 
                 class="icon-plus cursor-pointer text-2xl"
                 role="button"
@@ -54,19 +63,51 @@
 
             props:['name', 'value', 'minValue'],
 
+            /**
+             * Declared so a parent's @change listens to this event only, not the
+             * native change event bubbling up from the quantity input.
+             */
+            emits: ['change'],
+
             data() {
                 return  {
-                    quantity: this.value,
+                    quantity: Number(this.value),
                 }
             },
 
             watch: {
                 value() {
-                    this.quantity = this.value;
+                    this.quantity = Number(this.value);
                 },
             },
 
             methods: {
+                sanitize(event) {
+                    event.target.value = event.target.value.replace(/\D/g, '');
+                },
+
+                /**
+                 * Apply a typed quantity: empty or invalid input restores the
+                 * current quantity, anything below the minimum becomes the minimum.
+                 */
+                commit(event) {
+                    let quantity = parseInt(event.target.value, 10);
+
+                    if (isNaN(quantity)) {
+                        quantity = this.quantity;
+                    }
+
+                    quantity = Math.max(quantity, Number(this.minValue));
+
+                    event.target.value = quantity;
+
+                    if (quantity !== this.quantity) {
+                        this.quantity = quantity;
+
+                        this.$emit('change', this.quantity);
+                    }
+                },
+
                 increase() {
                     this.$emit('change', ++this.quantity);
                 },

@@ -1354,32 +1354,148 @@ class Importer extends AbstractImporter
         }
 
         /**
-         * Skip the image upload if product is already created
+         * Skip the image upload if already processed in this batch (e.g. multiple locales)
          */
-        if ($this->skuStorage->has($rowData['sku'])) {
+        if (isset($imagesData[$rowData['sku']])) {
             return;
         }
 
-        /**
-         * Reset the sku images data to prevent
-         * data duplication in case of multiple locales
-         */
         $imagesData[$rowData['sku']] = [];
 
         $imageNames = array_map('trim', explode(',', $rowData['images']));
 
         foreach ($imageNames as $key => $image) {
-            $path = 'import/'.$this->import->images_directory_path.'/'.$image;
+            if (filter_var($image, FILTER_VALIDATE_URL) || str_starts_with($image, 'http://') || str_starts_with($image, 'https://')) {
+                try {
+                    $tempDir = 'import/temp';
+                    $parsedPath = parse_url($image, PHP_URL_PATH);
+                    $extension = pathinfo($parsedPath, PATHINFO_EXTENSION) ?: 'jpg';
+                    $cleanName = preg_replace('/[^a-zA-Z0-9_-]/', '', pathinfo($parsedPath, PATHINFO_FILENAME));
+                    $fileName = uniqid().'_'.($cleanName ?: 'image').'.'.$extension;
+                    $tempPath = $tempDir.'/'.$fileName;
 
-            if (! Storage::disk('local')->has($path)) {
+                    $contents = @file_get_contents($image);
+                    if ($contents !== false) {
+                        Storage::disk('local')->put($tempPath, $contents);
+
+                        $imagesData[$rowData['sku']][] = [
+                            'name' => $fileName,
+                            'path' => Storage::disk('local')->path($tempPath),
+                        ];
+                    }
+                } catch (\Throwable $e) {
+                }
+
+                continue;
+            }
+
+            $path = $this->resolveImagePath($image);
+
+            if (! $path || ! Storage::disk('local')->has($path)) {
                 continue;
             }
 
             $imagesData[$rowData['sku']][] = [
-                'name' => $image,
+                'name' => basename($path),
                 'path' => Storage::disk('local')->path($path),
             ];
         }
+    }
+
+    /**
+     * Resolve the storage path for an imported image file.
+     */
+    protected function resolveImagePath(string $image): ?string
+    {
+        $directoryPath = trim($this->import->images_directory_path ?? '', '/\\');
+
+        // Handle full filesystem path (e.g. C:\laragon\www\...\storage\app\import\...)
+        $storageImportPath = storage_path('app/import');
+        $normalizedDir = str_replace('\\', '/', $directoryPath);
+        $normalizedStorage = str_replace('\\', '/', $storageImportPath);
+        if (str_starts_with($normalizedDir, $normalizedStorage)) {
+            $directoryPath = trim(substr($normalizedDir, strlen($normalizedStorage)), '/');
+        }
+
+        // Strip leading 'import/' if already present
+        if (str_starts_with($directoryPath, 'import/')) {
+            $directoryPath = substr($directoryPath, 7);
+        }
+
+        $searchDirectories = array_unique(array_filter([
+            $directoryPath,
+            $directoryPath !== '' ? $directoryPath.'/product-images' : 'product-images',
+            '',
+        ]));
+
+        $imageBasename = basename($image);
+        $filenameWithoutExt = pathinfo($imageBasename, PATHINFO_FILENAME);
+        $cleanBasename = rtrim($filenameWithoutExt, '.');
+        $originalExt = pathinfo($imageBasename, PATHINFO_EXTENSION);
+
+        $extensions = array_unique(array_filter([
+            $originalExt,
+            'png',
+            'jpg',
+            'jpeg',
+            'webp',
+            'gif',
+            'svg',
+            strtolower($originalExt),
+            strtoupper($originalExt),
+        ]));
+
+        foreach ($searchDirectories as $dir) {
+            $prefix = $dir !== '' ? 'import/'.$dir.'/' : 'import/';
+
+            // 1. Exact match with original image string or basename
+            if (Storage::disk('local')->has($prefix.$image)) {
+                return $prefix.$image;
+            }
+            if (Storage::disk('local')->has($prefix.$imageBasename)) {
+                return $prefix.$imageBasename;
+            }
+
+            // 2. Basename with alternative extensions & double-dot fix
+            foreach ($extensions as $ext) {
+                if (Storage::disk('local')->has($prefix.$filenameWithoutExt.'.'.$ext)) {
+                    return $prefix.$filenameWithoutExt.'.'.$ext;
+                }
+                if ($cleanBasename !== $filenameWithoutExt && Storage::disk('local')->has($prefix.$cleanBasename.'.'.$ext)) {
+                    return $prefix.$cleanBasename.'.'.$ext;
+                }
+                if (Storage::disk('local')->has($prefix.$cleanBasename.'..'.$ext)) {
+                    return $prefix.$cleanBasename.'..'.$ext;
+                }
+            }
+
+            // 3. Scan subdirectories in this path if it exists
+            $fullDirPath = Storage::disk('local')->path($prefix);
+            if (is_dir($fullDirPath)) {
+                $subdirs = glob($fullDirPath.'*', GLOB_ONLYDIR);
+                if ($subdirs) {
+                    foreach ($subdirs as $subdir) {
+                        $subPrefix = $prefix.basename($subdir).'/';
+                        if (Storage::disk('local')->has($subPrefix.$imageBasename)) {
+                            return $subPrefix.$imageBasename;
+                        }
+                        foreach ($extensions as $ext) {
+                            if (Storage::disk('local')->has($subPrefix.$filenameWithoutExt.'.'.$ext)) {
+                                return $subPrefix.$filenameWithoutExt.'.'.$ext;
+                            }
+                            if ($cleanBasename !== $filenameWithoutExt && Storage::disk('local')->has($subPrefix.$cleanBasename.'.'.$ext)) {
+                                return $subPrefix.$cleanBasename.'.'.$ext;
+                            }
+                            if (Storage::disk('local')->has($subPrefix.$cleanBasename.'..'.$ext)) {
+                                return $subPrefix.$cleanBasename.'..'.$ext;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -1395,6 +1511,17 @@ class Importer extends AbstractImporter
 
         foreach ($imagesData as $sku => $images) {
             $product = $this->skuStorage->get($sku);
+
+            if (! $product) {
+                continue;
+            }
+
+            // Clear any existing images for this product to prevent duplicates
+            $existingImages = $this->productImageRepository->findWhere(['product_id' => $product['id']]);
+            foreach ($existingImages as $existingImage) {
+                Storage::delete($existingImage->path);
+            }
+            $this->productImageRepository->deleteWhere(['product_id' => $product['id']]);
 
             foreach ($images as $key => $image) {
                 $file = new UploadedFile($image['path'], $image['name']);

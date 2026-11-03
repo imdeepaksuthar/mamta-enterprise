@@ -64,13 +64,28 @@ class ImportController extends Controller
 
         $supportedFormats = implode(',', $this->supportedFormats);
 
-        $this->validate(request(), [
+        $rules = [
             'type'                => 'required|in:'.$importers,
             'action'              => 'required|in:append,delete',
             'validation_strategy' => 'required|in:stop-on-errors,skip-errors',
             'allowed_errors'      => 'required|integer|min:0',
             'field_separator'     => 'required',
             'file'                => 'required|file|extensions:'.$supportedFormats.'|mimetypes:text/csv,text/plain,application/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/xml,application/xml',
+        ];
+
+        if (request('type') === 'products') {
+            if (request('image_source_type') === 'zip') {
+                $rules['images_zip'] = 'required|file|extensions:zip|max:524288';
+            } elseif (request('image_source_type') === 'server') {
+                $rules['images_directory_path'] = 'required|string';
+            }
+        }
+
+        $this->validate(request(), $rules, [
+            'images_zip.required'            => 'Please select a ZIP file containing product images.',
+            'images_zip.extensions'          => 'The images file must have a .zip extension.',
+            'images_zip.max'                 => 'The ZIP file size must not exceed 512MB.',
+            'images_directory_path.required' => 'Please specify the images directory path on the server.',
         ]);
 
         Event::dispatch('data_transfer.imports.create.before');
@@ -79,7 +94,6 @@ class ImportController extends Controller
             'type',
             'action',
             'process_in_queue',
-            'validation_strategy',
             'validation_strategy',
             'allowed_errors',
             'field_separator',
@@ -90,6 +104,40 @@ class ImportController extends Controller
             $data['process_in_queue'] = false;
         } else {
             $data['process_in_queue'] = true;
+        }
+
+        $imageSourceType = request('image_source_type');
+
+        if ($imageSourceType === 'zip' && request()->hasFile('images_zip') && request()->file('images_zip')->isValid()) {
+            @set_time_limit(0);
+            @ini_set('memory_limit', '1024M');
+
+            $zipFile = request()->file('images_zip');
+            $folderName = 'zip_'.uniqid();
+            $extractPath = storage_path('app/import/'.$folderName);
+
+            if (! file_exists($extractPath)) {
+                mkdir($extractPath, 0755, true);
+            }
+
+            if (class_exists(\ZipArchive::class)) {
+                $zip = new \ZipArchive;
+                if ($zip->open($zipFile->getRealPath()) === true) {
+                    $zip->extractTo($extractPath);
+                    $zip->close();
+                    $data['images_directory_path'] = $folderName;
+
+                    $items = array_values(array_diff(scandir($extractPath), ['.', '..']));
+                    if (count($items) === 1 && is_dir($extractPath.'/'.$items[0])) {
+                        $data['images_directory_path'] = $folderName.'/'.$items[0];
+                    }
+                } else {
+                    session()->flash('error', 'Unable to extract the uploaded ZIP archive. Please ensure the file is not corrupted.');
+                    return redirect()->back()->withInput();
+                }
+            }
+        } elseif ($imageSourceType === 'link') {
+            $data['images_directory_path'] = null;
         }
 
         $file = request()->file('file');
@@ -142,13 +190,27 @@ class ImportController extends Controller
 
         $import = $this->importRepository->findOrFail($id);
 
-        $this->validate(request(), [
+        $rules = [
             'type'                => 'required|in:'.$importers,
             'action'              => 'required|in:append,delete',
             'validation_strategy' => 'required|in:stop-on-errors,skip-errors',
             'allowed_errors'      => 'required|integer|min:0',
             'field_separator'     => 'required',
             'file'                => 'nullable|file|extensions:'.$supportedFormats.'|mimetypes:text/csv,text/plain,application/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/xml,application/xml',
+        ];
+
+        if (request('type') === 'products') {
+            if (request('image_source_type') === 'zip' && request()->hasFile('images_zip')) {
+                $rules['images_zip'] = 'file|extensions:zip|max:524288';
+            } elseif (request('image_source_type') === 'server') {
+                $rules['images_directory_path'] = 'required|string';
+            }
+        }
+
+        $this->validate(request(), $rules, [
+            'images_zip.extensions'          => 'The images file must have a .zip extension.',
+            'images_zip.max'                 => 'The ZIP file size must not exceed 512MB.',
+            'images_directory_path.required' => 'Please specify the images directory path on the server.',
         ]);
 
         Event::dispatch('data_transfer.imports.update.before');
@@ -158,7 +220,6 @@ class ImportController extends Controller
                 'type',
                 'action',
                 'process_in_queue',
-                'validation_strategy',
                 'validation_strategy',
                 'allowed_errors',
                 'field_separator',
@@ -176,6 +237,40 @@ class ImportController extends Controller
                 'summary'              => null,
             ]
         );
+
+        $imageSourceType = request('image_source_type');
+
+        if ($imageSourceType === 'zip' && request()->hasFile('images_zip') && request()->file('images_zip')->isValid()) {
+            @set_time_limit(0);
+            @ini_set('memory_limit', '1024M');
+
+            $zipFile = request()->file('images_zip');
+            $folderName = 'zip_'.uniqid();
+            $extractPath = storage_path('app/import/'.$folderName);
+
+            if (! file_exists($extractPath)) {
+                mkdir($extractPath, 0755, true);
+            }
+
+            if (class_exists(\ZipArchive::class)) {
+                $zip = new \ZipArchive;
+                if ($zip->open($zipFile->getRealPath()) === true) {
+                    $zip->extractTo($extractPath);
+                    $zip->close();
+                    $data['images_directory_path'] = $folderName;
+
+                    $items = array_values(array_diff(scandir($extractPath), ['.', '..']));
+                    if (count($items) === 1 && is_dir($extractPath.'/'.$items[0])) {
+                        $data['images_directory_path'] = $folderName.'/'.$items[0];
+                    }
+                } else {
+                    session()->flash('error', 'Unable to extract the uploaded ZIP archive. Please ensure the file is not corrupted.');
+                    return redirect()->back()->withInput();
+                }
+            }
+        } elseif ($imageSourceType === 'link') {
+            $data['images_directory_path'] = null;
+        }
 
         Storage::disk('private')->delete($import->error_file_path ?? '');
 

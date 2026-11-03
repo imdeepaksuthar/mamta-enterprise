@@ -82,6 +82,20 @@
             {!! core()->getConfigData('general.content.custom_scripts.custom_css') !!}
         </style>
 
+        @if (file_exists(public_path('css/custom.css')))
+            <link
+                rel="stylesheet"
+                href="{{ asset('css/custom.css') }}?v={{ filemtime(public_path('css/custom.css')) }}"
+            />
+        @endif
+
+        @if (file_exists(public_path('js/search-suggest.js')))
+            <script
+                src="{{ asset('js/search-suggest.js') }}?v={{ filemtime(public_path('js/search-suggest.js')) }}"
+                defer
+            ></script>
+        @endif
+
         @if(core()->getConfigData('general.content.speculation_rules.enabled'))
             <script type="speculationrules">
                 @json(core()->getSpeculationRules(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)

@@ -329,9 +329,26 @@ class ProductRepository extends Repository
                 if ($attribute->code == 'name') {
                     $synonyms = $this->searchSynonymRepository->getSynonymsByQuery(urldecode($params['name']));
 
+                    /**
+                     * Every word must appear in the name, in any order ("glue fevistik"
+                     * finds "Fevistik Glue Stick"), plurals match the singular ("pens"
+                     * finds "Ball Pen"), and the whole phrase also matches the SKU.
+                     */
                     $qb->where(function ($subQuery) use ($alias, $synonyms) {
                         foreach ($synonyms as $synonym) {
-                            $subQuery->orWhere($alias.'.text_value', 'like', '%'.$synonym.'%');
+                            $words = $this->getSearchWords($synonym);
+
+                            if (empty($words)) {
+                                continue;
+                            }
+
+                            $subQuery->orWhere(function ($wordQuery) use ($alias, $words) {
+                                foreach ($words as $word) {
+                                    $wordQuery->where($alias.'.text_value', 'like', '%'.addcslashes($word, '%_\\').'%');
+                                }
+                            });
+
+                            $subQuery->orWhere('products.sku', 'like', '%'.addcslashes(trim($synonym), '%_\\').'%');
                         }
                     });
                 } elseif ($attribute->code == 'url_key') {
@@ -401,6 +418,32 @@ class ProductRepository extends Repository
                 });
 
                 $qb->groupBy('products.id');
+            }
+
+            /**
+             * Rank search results by relevance unless the shopper picked a sort:
+             * names starting with the query first, then names where more of
+             * the words start a word ("pens" ranks "Ball Pen" above "Dispenser").
+             */
+            if (
+                ! empty($params['name'])
+                && empty($params['sort'])
+            ) {
+                $nameColumn = $prefix.'name_product_attribute_values.text_value';
+
+                $scores = ["(CASE WHEN {$nameColumn} LIKE ? THEN 2 ELSE 0 END)"];
+
+                $bindings = [addcslashes(trim(urldecode($params['name'])), '%_\\').'%'];
+
+                foreach ($this->getSearchWords(urldecode($params['name'])) as $word) {
+                    $word = addcslashes($word, '%_\\');
+
+                    $scores[] = "(CASE WHEN {$nameColumn} LIKE ? OR {$nameColumn} LIKE ? OR {$nameColumn} LIKE ? OR {$nameColumn} LIKE ? THEN 1 ELSE 0 END)";
+
+                    array_push($bindings, $word.'%', '% '.$word.'%', '%-'.$word.'%', '%('.$word.'%');
+                }
+
+                $qb->orderByRaw('('.implode(' + ', $scores).') DESC', $bindings);
             }
 
             /**
@@ -527,6 +570,22 @@ class ProductRepository extends Repository
     public function getSortOptions(array $params): array
     {
         return product_toolbar()->getOrder($params);
+    }
+
+    /**
+     * Split a search query into words, reducing plurals to the singular
+     * ("pens" => "pen", "boxes" => "box") so either form matches.
+     */
+    protected function getSearchWords(string $query): array
+    {
+        $words = array_filter(preg_split('/\s+/', trim($query)), 'strlen');
+
+        return array_values(array_map(
+            fn ($word) => mb_strlen($word) > 3
+                ? preg_replace(['/(x|ch|sh|ss)es$/iu', '/([^s])s$/iu'], ['$1', '$1'], $word)
+                : $word,
+            $words
+        ));
     }
 
     /**
